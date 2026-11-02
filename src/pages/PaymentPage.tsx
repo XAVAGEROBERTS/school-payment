@@ -170,7 +170,7 @@ export default function PaymentPage() {
             />
           </div>
           <h1 className="font-display text-xl font-extrabold tracking-tight text-brand-deep sm:text-2xl">
-            VICTORIAI UNIVERSITY
+            VICTORIA UNIVERSITY
             <br />
             PAYMENT PORTAL
           </h1>
