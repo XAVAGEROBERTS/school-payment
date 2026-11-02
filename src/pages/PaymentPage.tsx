@@ -33,7 +33,7 @@ export default function PaymentPage() {
 
     setLoading(true);
     try {
-      const res = await fetch(`${SUPABASE_URL}/functions/v1/school-payment`, {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/blue-tick-checkout`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -41,6 +41,7 @@ export default function PaymentPage() {
         },
         body: JSON.stringify({
           
+          type: 'school',
           regNumber: regNumber.toUpperCase().trim(),
           amount: Number(amount),
           phone: cleanPhone,
@@ -71,7 +72,7 @@ export default function PaymentPage() {
 
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`${SUPABASE_URL}/functions/v1/school-payment`, {
+        const res = await fetch(`${SUPABASE_URL}/functions/v1/blue-tick-checkout`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
