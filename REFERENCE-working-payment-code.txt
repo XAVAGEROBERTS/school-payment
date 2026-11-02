@@ -1,0 +1,208 @@
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { makeLimiter, tooManyRequests } from '../_shared/ratelimit.ts';
+
+const cors = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Max-Age': '86400',
+};
+
+declare const EdgeRuntime: { waitUntil: (p: Promise<unknown>) => void } | undefined;
+
+const NYLON_BASE = 'https://api.nylonpay.nilesquad.com/api/services';
+const CLIENT_FEATURES = 'error-code';
+
+// ─── Nylon HMAC helpers (ported from SDK) ───
+function sortValue(v: unknown): unknown {
+  if (v === null || typeof v !== 'object') return v;
+  if (Array.isArray(v)) return v.map(sortValue);
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(v as Record<string, unknown>).sort()) {
+    out[k] = sortValue((v as Record<string, unknown>)[k]);
+  }
+  return out;
+}
+function canonical(p: unknown) { return JSON.stringify(sortValue(p)); }
+function nonce(len = 16) {
+  const b = new Uint8Array(len);
+  crypto.getRandomValues(b);
+  return Array.from(b).map((x) => x.toString(16).padStart(2, '0')).join('');
+}
+function now() { return Date.now().toString(); }
+
+async function fingerprint(): Promise<string> {
+  const parts = [
+    `type:${Deno.build.os}`,
+    `platform:${Deno.build.os}`,
+    `arch:${Deno.build.arch}`,
+    `release:deno`,
+    `hostname:supabase-edge`,
+  ].join('|');
+  const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(parts));
+  return Array.from(new Uint8Array(h)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+async function hmacHex(secret: string, msg: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+  );
+  const s = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(msg));
+  return Array.from(new Uint8Array(s)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function callNylon(action: string, payload: Record<string, unknown>) {
+  const apiKey = Deno.env.get('NYLONPAY_API_KEY')!;
+  const apiSecret = Deno.env.get('NYLONPAY_API_SECRET')!;
+  const fp = await fingerprint();
+  const n = nonce();
+  const ts = now();
+
+  const inner = { ...payload, _fingerprint: fp };
+  const cp = canonical(inner);
+  const sigInput = `${fp}.${n}.${ts}.${cp}`;
+  const signature = await hmacHex(apiSecret, sigInput);
+
+  const envelope = { intent: 'execute', service: 'sdk', action, payload: inner };
+
+  const res = await fetch(NYLON_BASE, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-nylon-features': CLIENT_FEATURES,
+      'x-nylon-key': apiKey,
+      'x-nylon-nonce': n,
+      'x-nylon-signature': signature,
+      'x-nylon-timestamp': ts,
+    },
+    body: JSON.stringify(envelope),
+  });
+  const text = await res.text();
+  let body: any; try { body = JSON.parse(text); } catch { body = { raw: text }; }
+  return { ok: res.ok, status: res.status, body };
+}
+
+Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
+
+  try {
+    const { repairerId, phone, plan } = await req.json();
+
+    if (!repairerId) return json({ error: 'repairerId required' }, 400);
+
+    // Rate limit: 10 checkout attempts per hour per repairer
+    const limiter = makeLimiter(10, '1 h');
+    const rl = await limiter.limit(`checkout:${repairerId}`);
+    const blocked = tooManyRequests(rl, cors);
+    if (blocked) return blocked;
+    if (!phone || String(phone).replace(/\D/g, '').length < 9) return json({ error: 'Valid phone number required' }, 400);
+
+    const supabase = createClient(
+      Deno.env.get('SUPABASE_URL')!,
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+    );
+
+    const { data: chosenPlan, error: planErr } = await supabase
+      .from('subscription_plans')
+      .select('slug, name, amount, duration_days')
+      .eq('slug', String(plan ?? 'monthly'))
+      .eq('active', true)
+      .maybeSingle();
+
+    if (planErr || !chosenPlan) {
+      return json({ error: `Unknown or inactive plan: ${plan}` }, 400);
+    }
+
+    const { data: rp, error: rpErr } = await supabase
+      .from('repairer_profiles')
+      .select('id, display_name, user_id, users:user_id (email, phone, full_name)')
+      .eq('id', repairerId)
+      .single();
+    if (rpErr || !rp) return json({ error: 'Repairer not found' }, 404);
+
+    // Dedupe
+    const { data: recentPending } = await supabase
+      .from('blue_tick_subscriptions')
+      .select('id')
+      .eq('repairer_id', repairerId)
+      .eq('status', 'pending')
+      .gte('created_at', new Date(Date.now() - 2 * 60 * 1000).toISOString())
+      .limit(1)
+      .maybeSingle();
+    if (recentPending) return json({ error: 'A payment request is already in progress.' }, 429);
+
+    const user = (rp as any).users;
+    const merchantReference = `BT-${repairerId.slice(0, 8)}-${Date.now().toString(36)}`;
+    const paymentReference = crypto.randomUUID();
+
+    const { data: sub, error: subErr } = await supabase
+      .from('blue_tick_subscriptions')
+      .insert({
+        repairer_id: repairerId,
+        merchant_reference: merchantReference,
+        invoice_id: paymentReference,
+        amount: chosenPlan.amount,
+        plan: String(plan),
+        duration_days: chosenPlan.duration_days,
+        status: 'pending',
+      })
+      .select()
+      .single();
+    if (subErr) throw subErr;
+
+    const background = (async () => {
+      try {
+        const result = await callNylon('sdk-collect-payment', {
+          amount: chosenPlan.amount,
+          currency: 'UGX',
+          description: `Fixora Blue Tick (${chosenPlan.name})`,
+          customer: {
+            name: rp.display_name || user?.full_name || 'Fixora Repairer',
+            phoneNumber: String(phone),
+            email: user?.email,
+          },
+          reference: paymentReference,
+          metadata: {
+            subscription_id: sub.id,
+            repairer_id: repairerId,
+            merchant_reference: merchantReference,
+            plan: String(plan),
+          },
+        });
+        if (!result.ok) {
+          console.error('[checkout-bg] nylon error', result.status, JSON.stringify(result.body));
+          await supabase
+            .from('blue_tick_subscriptions')
+            .update({ raw_payload: { sdk_error: result.body } })
+            .eq('id', sub.id);
+          return;
+        }
+        console.log('[checkout-bg] success', JSON.stringify(result.body));
+      } catch (e: any) {
+        console.error('[checkout-bg] caught', e?.message, e?.stack);
+        await supabase
+          .from('blue_tick_subscriptions')
+          .update({ raw_payload: { sdk_throw: e?.message } })
+          .eq('id', sub.id);
+      }
+    })();
+
+    if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime?.waitUntil) {
+      EdgeRuntime.waitUntil(background);
+    } else {
+      await background;
+    }
+
+    return json({ subscriptionId: sub.id, merchantReference, paymentReference, status: 'pending', plan: String(plan) });
+  } catch (e: any) {
+    console.error('[checkout] caught', e?.message, e?.stack);
+    return json({ error: e?.message || 'Unknown error' }, 500);
+  }
+
+  function json(obj: unknown, status = 200) {
+    return new Response(JSON.stringify(obj), {
+      status,
+      headers: { ...cors, 'Content-Type': 'application/json' },
+    });
+  }
+});
