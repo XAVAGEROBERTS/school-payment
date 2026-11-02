@@ -7,7 +7,7 @@ const STUDENTS: Record<string, string> = {
   'VU-BAED-2903-0763-DAY': 'RUBANGAKENE JACOB ELVIS',
 };
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL.replace(/\/$/, '');
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 export default function PaymentPage() {
