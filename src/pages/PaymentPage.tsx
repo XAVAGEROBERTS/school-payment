@@ -26,6 +26,11 @@ export default function PaymentPage() {
       return;
     }
 
+    // Normalize phone to 256XXXXXXXXX (Nylon Pay requirement)
+    let cleanPhone = phone.replace(/\D/g, '');
+    if (cleanPhone.startsWith('0')) cleanPhone = '256' + cleanPhone.slice(1);
+    if (!cleanPhone.startsWith('256')) cleanPhone = '256' + cleanPhone;
+
     setLoading(true);
     try {
       const res = await fetch(`${SUPABASE_URL}/functions/v1/blue-tick-checkout`, {
@@ -38,7 +43,7 @@ export default function PaymentPage() {
           type: 'school',
           regNumber: regNumber.toUpperCase().trim(),
           amount: Number(amount),
-          phone,
+          phone: cleanPhone,
         }),
       });
 
