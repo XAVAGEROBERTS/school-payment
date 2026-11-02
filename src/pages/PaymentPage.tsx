@@ -36,14 +36,20 @@ export default function PaymentPage() {
         },
         body: JSON.stringify({
           type: 'school',
-          type: 'school',
           regNumber: regNumber.toUpperCase().trim(),
           amount: Number(amount),
           phone,
         }),
       });
 
-      const data = await res.json();
+      const text = await res.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        throw new Error(text.slice(0, 100) || 'Server returned an invalid response');
+      }
+      
       if (!res.ok) throw new Error(data.error || 'Payment failed');
 
       setSuccess({ reference: data.reference, amount: Number(amount), status: 'pending' });
