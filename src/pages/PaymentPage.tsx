@@ -31,6 +31,8 @@ export default function PaymentPage() {
     if (cleanPhone.startsWith('0')) cleanPhone = '256' + cleanPhone.slice(1);
     if (!cleanPhone.startsWith('256')) cleanPhone = '256' + cleanPhone;
 
+
+
     setLoading(true);
     try {
       const res = await fetch(`${SUPABASE_URL}/functions/v1/blue-tick-checkout`, {
