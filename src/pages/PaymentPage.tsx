@@ -91,39 +91,40 @@ export default function PaymentPage() {
     }
   }
 
-  // ── Poll Database for status change ──
+  // ── Poll Nylon Pay directly (The logic that worked) ──
   useEffect(() => {
     if (!success || success.status === 'success') return;
 
     let cancelled = false;
     let attempts = 0;
-    const MAX_ATTEMPTS = 100;
+    const MAX_ATTEMPTS = 100; // 100 × 3s = 5 min
 
     const tick = async () => {
       if (cancelled) return;
       attempts++;
       if (attempts > MAX_ATTEMPTS) {
-        toast.error('Payment timeout. Please check your email or receipt later.');
+        toast.error('Payment status timeout. Check your phone.');
         setSuccess(null);
         return;
       }
       
       try {
-        const res = await fetch(
-          `${SUPABASE_URL}/rest/v1/school_payments?reference=eq.${encodeURIComponent(success.reference)}&select=status`,
-          {
-            headers: {
-              apikey: SUPABASE_ANON_KEY,
-              Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-            },
-          }
-        );
-        const rows = await res.json();
-        const status = String(rows?.[0]?.status || '').toLowerCase();
+        // Ask the backend (which asks Nylon directly)
+        const res = await fetch(`${SUPABASE_URL}/functions/v1/blue-tick-checkout`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          },
+          body: JSON.stringify({ type: 'school_status', reference: success.reference }),
+        });
         
-        console.log('[payment] poll', attempts, '| DB Status:', status);
+        const data = await res.json();
+        const status = String(data.status).toLowerCase();
+        console.log('[payment] poll', attempts, '| Nylon Status:', status);
 
-        if (status === 'successful' || status === 'success') {
+        // Catch success
+        if (status.includes('success') || status.includes('paid') || status === 'complete') {
           clearInterval(interval);
           toast.success('Payment confirmed! Loading receipt...');
           navigate('/receipt', {
@@ -135,9 +136,11 @@ export default function PaymentPage() {
               reason: success.reason,
             },
           });
-        } else if (status === 'failed' || status === 'cancelled') {
+        } 
+        // Catch failure
+        else if (status.includes('fail') || status.includes('cancel') || status.includes('reject')) {
           clearInterval(interval);
-          toast.error('Payment failed or cancelled. Please try again.');
+          toast.error(`Payment ${status}. Please try again.`);
           setSuccess(null);
         }
       } catch (e) {
@@ -146,7 +149,7 @@ export default function PaymentPage() {
     };
 
     const interval = setInterval(tick, 3000);
-    tick(); 
+    tick(); // immediate first check
 
     return () => {
       cancelled = true;
