@@ -100,6 +100,8 @@ export default function PaymentPage() {
       attempts++;
       if (attempts > MAX_ATTEMPTS) {
         console.warn('[payment] polling timed out');
+        toast.error('Payment status timeout. Check your phone.');
+        setSuccess(null);
         return;
       }
       try {
@@ -113,11 +115,13 @@ export default function PaymentPage() {
         });
         
         const data = await res.json();
-        const status = data.status;
+        const status = String(data.status).toLowerCase();
         console.log('[payment] poll', attempts, status);
 
-        if (status === 'successful' || status === 'success') {
+        // CATCH ALL SUCCESS STATES
+        if (status.includes('success') || status.includes('paid') || status === 'complete') {
           clearInterval(interval);
+          toast.success('Payment confirmed! Loading receipt...');
           navigate('/receipt', {
             state: {
               studentName: success.studentName,
@@ -127,7 +131,9 @@ export default function PaymentPage() {
               reason: success.reason,
             },
           });
-        } else if (status === 'failed' || status === 'cancelled') {
+        } 
+        // CATCH ALL FAILURE STATES
+        else if (status.includes('fail') || status.includes('cancel') || status.includes('reject')) {
           clearInterval(interval);
           toast.error(`Payment ${status}. Please try again.`);
           setSuccess(null);
