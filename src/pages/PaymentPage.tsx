@@ -87,7 +87,7 @@ export default function PaymentPage() {
     }
   }
 
-  // ── Poll school_payments for status change ──
+  // ── Poll Nylon Pay for status change ──
   useEffect(() => {
     if (!success || success.status === 'success') return;
 
@@ -103,18 +103,17 @@ export default function PaymentPage() {
         return;
       }
       try {
-        const res = await fetch(
-          `${SUPABASE_URL}/rest/v1/school_payments?reference=eq.${encodeURIComponent(success.reference)}&select=status`,
-          {
-            headers: {
-              apikey: SUPABASE_ANON_KEY,
-              Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-            },
+        const res = await fetch(`${SUPABASE_URL}/functions/v1/blue-tick-checkout`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
           },
-        );
-        const rows = await res.json();
-        const row = Array.isArray(rows) ? rows[0] : null;
-        const status = row?.status;
+          body: JSON.stringify({ type: 'school_status', reference: success.reference }),
+        });
+        
+        const data = await res.json();
+        const status = data.status;
         console.log('[payment] poll', attempts, status);
 
         if (status === 'successful' || status === 'success') {
@@ -130,11 +129,11 @@ export default function PaymentPage() {
           });
         } else if (status === 'failed' || status === 'cancelled') {
           clearInterval(interval);
-          toast.error('Payment failed or cancelled. Please try again.');
+          toast.error(`Payment ${status}. Please try again.`);
           setSuccess(null);
         }
       } catch (e) {
-        // network blip — keep polling
+        console.error('[payment] poll error', e);
       }
     };
 
