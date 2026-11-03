@@ -8,8 +8,12 @@ const STUDENTS: Record<string, string> = {
   'VU-BAED-2903-0763-DAY': 'RUBANGAKENE JACOB ELVIS',
 };
 
-const SUPABASE_URL = (import.meta.env.VITE_SUPABASE_URL as string).replace(/\/$/, '');
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+// Fallback to hardcoded values if Vercel env vars fail to load
+const ENV_URL = import.meta.env.VITE_SUPABASE_URL;
+const ENV_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+const SUPABASE_URL = (ENV_URL || 'https://vncgvzfbarcyvytgtdjh.supabase.co').replace(/\/$/, '');
+const SUPABASE_ANON_KEY = ENV_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZuY2d2emZiYXJjeXZ5dGd0ZGpoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE1NzE4MTMsImV4cCI6MjEwNzE0NzgxM30.CyJ4V2v6gM_8kwllMiqsJMXreJ507MzKndbnDiiz1kQ';
 
 type SuccessState = {
   reference: string;
