@@ -15,6 +15,7 @@ export default function PaymentPage() {
   const [studentName, setStudentName] = useState<string | null>(null);
   const [lookupFailed, setLookupFailed] = useState(false);
   const [amount, setAmount] = useState('');
+  const [reason, setReason] = useState('Tuition Payment');
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState<{ reference: string; amount: number; status: 'pending' | 'success' } | null>(null);
@@ -47,6 +48,7 @@ export default function PaymentPage() {
           regNumber: regNumber.toUpperCase().trim(),
           amount: Number(amount),
           phone: cleanPhone,
+          reason: reason,
         }),
       });
 
@@ -261,6 +263,22 @@ export default function PaymentPage() {
               <p className="mt-2 text-[12px] text-slate-500">
                 You'll receive a prompt to approve this payment.
               </p>
+            </div>
+
+            <div className="mb-4">
+              <label className="mb-2 block text-[11px] font-extrabold uppercase tracking-[0.08em] text-slate-500">
+                Payment Reason
+              </label>
+              <select
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                className="h-12 w-full rounded-xl border border-slate-200 bg-white px-3 text-[15px] text-slate-800 focus:border-brand-mid focus:outline-none focus:ring-4 focus:ring-brand-mid/10 disabled:bg-slate-50 transition-all"
+              >
+                <option value="Tuition Payment">Tuition Payment</option>
+                <option value="Graduation Fees">Graduation Fees</option>
+                <option value="Hostel Fees">Hostel Fees</option>
+                <option value="Registration Fees">Registration Fees</option>
+              </select>
             </div>
 
             <button
