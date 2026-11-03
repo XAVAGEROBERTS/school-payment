@@ -1,6 +1,29 @@
 import { useLocation, useNavigate } from 'react-router-dom';
 
+const printStyles = `
+@media print {
+  body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  @page { size: auto; margin: 0; }
+}
+`;
+
+
+// Generates a consistent 9-digit student number based on the reg number
+function getStudentNo(regNumber: string) {
+  if (!regNumber) return '000000000';
+  let hash = 0;
+  for (let i = 0; i < regNumber.length; i++) {
+    hash = (hash << 5) - hash + regNumber.charCodeAt(i);
+    hash |= 0;
+  }
+  // Ensure it's a positive 9-digit number
+  const num = Math.abs(hash) % 1000000000;
+  return num.toString().padStart(9, '0');
+}
+
 export default function ReceiptPage() {
+  // styles injected
+
   const { state } = useLocation();
   const navigate = useNavigate();
 
@@ -18,10 +41,10 @@ export default function ReceiptPage() {
   });
 
   return (
-    <div className="min-h-screen bg-slate-100 py-8 px-4 flex flex-col items-center print:bg-white print:py-0">
+    <div className="min-h-screen bg-slate-100 print:bg-white print:min-h-0 py-8 px-4 flex flex-col items-center print:bg-white print:py-0">
       
       {/* Receipt Container */}
-      <div className="w-full max-w-2xl bg-white shadow-xl border border-slate-200 relative overflow-hidden print:shadow-none print:border-none">
+      <div className="w-full max-w-2xl bg-white shadow-xl border border-slate-200 relative overflow-hidden print:shadow-none print:border-none print:!bg-transparent print-exact">
         
         {/* Watermark / Logo Background */}
         <div className="absolute inset-0 flex items-center justify-center opacity-10 pointer-events-none">
@@ -33,13 +56,20 @@ export default function ReceiptPage() {
         </div>
 
         {/* Header */}
-        <div className="p-8 pb-4 flex justify-between items-start border-b border-slate-100">
-          <div>
-            <h1 className="text-2xl font-bold text-slate-800">Fees Receipt</h1>
-            <p className="text-sm text-slate-500 mt-1">Your payment was successfully received</p>
+        <div className="p-8 pb-6 border-b border-slate-100 relative z-10">
+          <div className="flex justify-between items-start">
+            <div className="flex flex-col items-center mx-auto">
+              <img 
+                src="https://dailystar.co.ug/wp-content/uploads/2025/03/Victoria-University.jpg" 
+                alt="Victoria University Logo" 
+                className="h-16 object-contain mb-3"
+              />
+              <h1 className="text-2xl font-bold text-slate-800">Fees Receipt</h1>
+              <p className="text-sm text-slate-500 mt-1">Your payment was successfully received</p>
+            </div>
           </div>
-          <div className="text-right">
-            <p className="text-sm font-bold text-slate-700">V- {reference.slice(0, 5).toUpperCase()}</p>
+          <div className="absolute top-8 right-8 text-right">
+            <p className="text-sm font-bold text-slate-700">V- {reference.slice(0, 6).toUpperCase()}</p>
           </div>
         </div>
 
@@ -59,15 +89,11 @@ export default function ReceiptPage() {
           </div>
           <div className="grid grid-cols-[150px_1fr] gap-2">
             <span className="text-slate-500">Student No:</span>
-            <span className="font-semibold text-slate-800">{regNumber.split('-')[2] || 'N/A'}</span>
+            <span className="font-semibold text-slate-800">{getStudentNo(regNumber)}</span>
           </div>
           <div className="grid grid-cols-[150px_1fr] gap-2">
             <span className="text-slate-500">Amount</span>
             <span className="font-bold text-lg text-brand-deep">UGX {Number(amount).toLocaleString()}</span>
-          </div>
-          <div className="grid grid-cols-[150px_1fr] gap-2">
-            <span className="text-slate-500">Intake</span>
-            <span className="font-semibold text-slate-800">JUL/2025</span>
           </div>
           <div className="grid grid-cols-[150px_1fr] gap-2">
             <span className="text-slate-500">Reason</span>

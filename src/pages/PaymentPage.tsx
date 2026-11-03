@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import toast, { Toaster } from 'react-hot-toast';
 import { Phone, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
 import { Input } from '../components/Input';
@@ -7,10 +8,20 @@ const STUDENTS: Record<string, string> = {
   'VU-BAED-2903-0763-DAY': 'RUBANGAKENE JACOB ELVIS',
 };
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL.replace(/\/$/, '');
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const SUPABASE_URL = (import.meta.env.VITE_SUPABASE_URL as string).replace(/\/$/, '');
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+
+type SuccessState = {
+  reference: string;
+  amount: number;
+  status: 'pending' | 'success';
+  studentName: string;
+  regNumber: string;
+  reason: string;
+};
 
 export default function PaymentPage() {
+  const navigate = useNavigate();
   const [regNumber, setRegNumber] = useState('');
   const [studentName, setStudentName] = useState<string | null>(null);
   const [lookupFailed, setLookupFailed] = useState(false);
@@ -18,7 +29,7 @@ export default function PaymentPage() {
   const [reason, setReason] = useState('Tuition Payment');
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
-  const [success, setSuccess] = useState<{ reference: string; amount: number; status: 'pending' | 'success' } | null>(null);
+  const [success, setSuccess] = useState<SuccessState | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -27,12 +38,9 @@ export default function PaymentPage() {
       return;
     }
 
-    // Normalize phone to 256XXXXXXXXX (Nylon Pay requirement)
     let cleanPhone = phone.replace(/\D/g, '');
     if (cleanPhone.startsWith('0')) cleanPhone = '256' + cleanPhone.slice(1);
     if (!cleanPhone.startsWith('256')) cleanPhone = '256' + cleanPhone;
-
-
 
     setLoading(true);
     try {
@@ -43,12 +51,11 @@ export default function PaymentPage() {
           'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
         },
         body: JSON.stringify({
-          
           type: 'school',
           regNumber: regNumber.toUpperCase().trim(),
           amount: Number(amount),
           phone: cleanPhone,
-          reason: reason,
+          reason,
         }),
       });
 
@@ -57,76 +64,88 @@ export default function PaymentPage() {
       try {
         data = JSON.parse(text);
       } catch {
-        throw new Error(text.slice(0, 100) || 'Server returned an invalid response');
+        throw new Error(text.slice(0, 120) || 'Server returned an invalid response');
       }
-      
       if (!res.ok) throw new Error(data.error || 'Payment failed');
 
-      setSuccess({ reference: data.reference, amount: Number(amount), status: 'pending' });
-      toast.success('Check your phone to approve payment');
+      console.log('[payment] initiated', data.reference);
+
+      setSuccess({
+        reference: data.reference,
+        amount: Number(amount),
+        status: 'pending',
+        studentName: data.studentName,
+        regNumber: data.regNumber,
+        reason: data.reason ?? reason,
+      });
+      toast.success('Check your phone to approve the payment');
     } catch (err: any) {
+      console.error('[payment] error', err);
       toast.error(err.message || 'Could not initiate payment');
     } finally {
       setLoading(false);
     }
   }
 
+  // ── Poll school_payments for status change ──
   useEffect(() => {
     if (!success || success.status === 'success') return;
 
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`${SUPABASE_URL}/functions/v1/blue-tick-checkout`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-          },
-          body: JSON.stringify({ type: 'school_status', reference: success.reference }),
-        });
-        const data = await res.json();
-        
-        // If Nylon says 'successful' or 'paid', stop polling
-        if (data.status === 'successful' || data.status === 'paid' || data.status === 'success') {
-          setSuccess((prev) => prev ? { ...prev, status: 'success' } : null);
-          clearInterval(interval);
-        }
-      } catch (e) {
-        // Ignore network errors while polling
+    let cancelled = false;
+    let attempts = 0;
+    const MAX_ATTEMPTS = 100; // 100 × 3s = 5 min
+
+    const tick = async () => {
+      if (cancelled) return;
+      attempts++;
+      if (attempts > MAX_ATTEMPTS) {
+        console.warn('[payment] polling timed out');
+        return;
       }
-    }, 3000);
-
-    return () => clearInterval(interval);
-  }, [success]);
-
-
-  useEffect(() => {
-    if (!success || success.status === 'success') return;
-
-    const interval = setInterval(async () => {
       try {
         const res = await fetch(
-          `${SUPABASE_URL}/rest/v1/school_payments?reference=eq.${success.reference}&select=status`,
+          `${SUPABASE_URL}/rest/v1/school_payments?reference=eq.${encodeURIComponent(success.reference)}&select=status`,
           {
             headers: {
-              'apikey': SUPABASE_ANON_KEY,
-              'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+              apikey: SUPABASE_ANON_KEY,
+              Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
             },
-          }
+          },
         );
-        const data = await res.json();
-        
-        if (data && data[0] && data[0].status === 'success') {
-          setSuccess((prev) => prev ? { ...prev, status: 'success' } : null);
+        const rows = await res.json();
+        const row = Array.isArray(rows) ? rows[0] : null;
+        const status = row?.status;
+        console.log('[payment] poll', attempts, status);
+
+        if (status === 'successful' || status === 'success') {
           clearInterval(interval);
+          navigate('/receipt', {
+            state: {
+              studentName: success.studentName,
+              regNumber: success.regNumber,
+              amount: success.amount,
+              reference: success.reference,
+              reason: success.reason,
+            },
+          });
+        } else if (status === 'failed' || status === 'cancelled') {
+          clearInterval(interval);
+          toast.error('Payment failed or cancelled. Please try again.');
+          setSuccess(null);
         }
       } catch (e) {
-        // Ignore network errors while polling
+        // network blip — keep polling
       }
-    }, 3000);
+    };
 
-    return () => clearInterval(interval);
-  }, [success]);
+    const interval = setInterval(tick, 3000);
+    tick(); // immediate first check
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [success, navigate]);
 
   if (success) {
     return (
@@ -134,18 +153,20 @@ export default function PaymentPage() {
         <Toaster position="top-center" />
         <div className="card w-full max-w-md p-8 text-center border-t-4 border-t-brand-mid">
           <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-brand-soft text-brand-mid">
-            <CheckCircle2 size={44} />
+            <Loader2 size={44} className="animate-spin" />
           </div>
           <h1 className="mt-6 font-display text-2xl font-extrabold text-brand-deep">
-            Payment Initiated
+            Processing Payment
           </h1>
           <p className="mt-1 text-[13px] text-slate-500">
-            Approve the prompt on your phone to complete the payment.
+            Check your phone and enter your PIN to approve.
+            <br />
+            <span className="text-slate-400">This page will update automatically.</span>
           </p>
           <div className="mt-6 space-y-3 rounded-2xl bg-slate-50 p-5 text-left text-sm">
             <div className="flex justify-between items-center">
               <span className="text-slate-500">Student</span>
-              <strong className="text-brand-deep">{studentName}</strong>
+              <strong className="text-brand-deep">{success.studentName}</strong>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-slate-500">Amount</span>
@@ -153,7 +174,12 @@ export default function PaymentPage() {
                 UGX {success.amount.toLocaleString()}
               </strong>
             </div>
-
+            <div className="flex justify-between items-center">
+              <span className="text-slate-500">Reference</span>
+              <span className="font-mono text-[11px] text-slate-600">
+                {success.reference}
+              </span>
+            </div>
           </div>
           <button
             type="button"
@@ -166,7 +192,7 @@ export default function PaymentPage() {
             }}
             className="btn btn-primary mt-8 w-full"
           >
-            Pay another student
+            Cancel / Go Back
           </button>
         </div>
       </div>
@@ -179,9 +205,9 @@ export default function PaymentPage() {
       <div className="w-full max-w-md">
         <div className="mb-5 flex flex-col items-center text-center">
           <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-xl bg-white shadow-md ring-1 ring-slate-100 mb-2">
-            <img 
-              src="https://dailystar.co.ug/wp-content/uploads/2025/03/Victoria-University.jpg" 
-              alt="Victoria University Logo" 
+            <img
+              src="https://dailystar.co.ug/wp-content/uploads/2025/03/Victoria-University.jpg"
+              alt="Victoria University Logo"
               className="h-full w-full object-contain"
             />
           </div>
@@ -204,7 +230,6 @@ export default function PaymentPage() {
                 onChange={(e) => {
                   const val = e.target.value.toUpperCase();
                   setRegNumber(val);
-                  // Live lookup as they type
                   const cleaned = val.trim();
                   if (cleaned.length > 5) {
                     const name = STUDENTS[cleaned];
@@ -213,7 +238,7 @@ export default function PaymentPage() {
                       setLookupFailed(false);
                     } else {
                       setStudentName(null);
-                      setLookupFailed(false); // Don't show error while typing
+                      setLookupFailed(false);
                     }
                   } else {
                     setStudentName(null);
@@ -233,7 +258,9 @@ export default function PaymentPage() {
 
             {studentName && (
               <div className="rounded-2xl bg-brand-soft border border-brand-mid/20 p-5 text-center animate-in fade-in slide-in-from-top-2 duration-300">
-                <p className="font-display text-xl font-extrabold text-brand-deep">{studentName}</p>
+                <p className="font-display text-xl font-extrabold text-brand-deep">
+                  {studentName}
+                </p>
               </div>
             )}
 
@@ -297,8 +324,6 @@ export default function PaymentPage() {
             </button>
           </form>
         </div>
-
-        
       </div>
     </div>
   );
