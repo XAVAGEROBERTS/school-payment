@@ -91,7 +91,7 @@ export default function PaymentPage() {
     }
   }
 
-  // ── Poll Nylon Pay directly (The logic that worked) ──
+  // ── Poll BOTH Database and Nylon for status change ──
   useEffect(() => {
     if (!success || success.status === 'success') return;
 
@@ -103,13 +103,26 @@ export default function PaymentPage() {
       if (cancelled) return;
       attempts++;
       if (attempts > MAX_ATTEMPTS) {
-        toast.error('Payment status timeout. Check your phone.');
+        toast.error('Payment status timeout. Please try again.');
         setSuccess(null);
         return;
       }
       
       try {
-        // Ask the backend (which asks Nylon directly)
+        // 1. Check our Database (Fastest - updated by Webhook)
+        const dbRes = await fetch(
+          `${SUPABASE_URL}/rest/v1/school_payments?reference=eq.${encodeURIComponent(success.reference)}&select=status`,
+          {
+            headers: {
+              apikey: SUPABASE_ANON_KEY,
+              Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+            },
+          }
+        );
+        const dbRows = await dbRes.json();
+        const dbStatus = String(dbRows?.[0]?.status || '').toLowerCase();
+
+        // 2. Check Nylon API (Fallback if webhook is slow)
         const res = await fetch(`${SUPABASE_URL}/functions/v1/blue-tick-checkout`, {
           method: 'POST',
           headers: {
@@ -120,11 +133,17 @@ export default function PaymentPage() {
         });
         
         const data = await res.json();
-        const status = String(data.status).toLowerCase();
-        console.log('[payment] poll', attempts, '| Nylon Status:', status);
+        const nylonStatus = String(data.status || '').toLowerCase();
+        
+        console.log('[payment] poll', attempts, '| DB:', dbStatus, '| Nylon:', nylonStatus);
 
-        // Catch success
-        if (status.includes('success') || status.includes('paid') || status === 'complete') {
+        const isSuccess = dbStatus === 'successful' || dbStatus === 'success' || 
+                          nylonStatus.includes('success') || nylonStatus.includes('paid');
+                          
+        const isFailed = dbStatus === 'failed' || dbStatus === 'cancelled' || 
+                         nylonStatus.includes('fail') || nylonStatus.includes('cancel');
+
+        if (isSuccess) {
           clearInterval(interval);
           toast.success('Payment confirmed! Loading receipt...');
           navigate('/receipt', {
@@ -136,11 +155,9 @@ export default function PaymentPage() {
               reason: success.reason,
             },
           });
-        } 
-        // Catch failure
-        else if (status.includes('fail') || status.includes('cancel') || status.includes('reject')) {
+        } else if (isFailed) {
           clearInterval(interval);
-          toast.error(`Payment ${status}. Please try again.`);
+          toast.error('Payment failed or cancelled. Please try again.');
           setSuccess(null);
         }
       } catch (e) {
@@ -149,7 +166,7 @@ export default function PaymentPage() {
     };
 
     const interval = setInterval(tick, 3000);
-    tick(); // immediate first check
+    tick(); 
 
     return () => {
       cancelled = true;
